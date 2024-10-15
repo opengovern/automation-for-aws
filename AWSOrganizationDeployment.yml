@@ -6,10 +6,6 @@ Parameters:
     Type: String
     Default: OpenGovernanceIAMUser
     Description: IAM User to create
-  IAMGroupnameInOrganizationAccount:
-    Type: String
-    Default: OpenGovernanceIAMGroup
-    Description: IAM Group to create
   RoleNameInAccount:
     Type: String
     Default: OpenGovernanceReadOnly
@@ -68,113 +64,34 @@ Resources:
     Type: 'AWS::IAM::User'
     Properties:
       UserName: !Ref IAMUsernameInOrganizationAccount
-
-  # IAM Group in the Management Account
-  IAMGroupInOrganizationAccount:
-    Type: 'AWS::IAM::Group'
-    Properties:
-      GroupName: !Ref IAMGroupnameInOrganizationAccount
-
-  # Add IAM User to IAM Group
-  AddOrganizationUserToOrganizationGroup:
-    Type: 'AWS::IAM::UserToGroupAddition'
-    Properties:
-      Users:
-        - !Ref IAMUserInOrganizationAccount
-      GroupName: !Ref IAMGroupnameInOrganizationAccount
-    DependsOn: IAMGroupInOrganizationAccount
-
-  # Attach Policy to IAM Group to Allow AssumeRole on Member and Additional Roles
-  AttachRoleToOrganizationGroup:
-    Type: 'AWS::IAM::GroupPolicy'
-    Properties:
-      PolicyName: OpenGovernanceAllowRoleAssumption
-      GroupName: !Ref IAMGroupnameInOrganizationAccount
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action:
-              - 'sts:AssumeRole'
-            Resource:
-              - !Sub 'arn:aws:iam::*:role/${RoleNameInAccount}'
-              - !Sub 'arn:aws:iam::*:role/OpenGovernanceSecurity'
-              - !Sub 'arn:aws:iam::*:role/OpenGovernanceReader'
-              - !Sub 'arn:aws:iam::*:role/OpenGovernanceSSO'
-              - !Sub 'arn:aws:iam::*:role/OpenGovernanceOrganizationReader'
-    DependsOn: IAMGroupInOrganizationAccount
-
-  # Define Security Role
-  OpenGovernanceSecurityRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      RoleName: OpenGovernanceSecurity
-      Description: Security access role for OpenGovernance
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:user/${IAMUsernameInOrganizationAccount}"
-            Action:
-              - 'sts:AssumeRole'
-              - 'sts:TagSession'
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/SecurityAudit
-
-  # Define Reader Role
-  OpenGovernanceReaderRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      RoleName: OpenGovernanceReader
-      Description: Reader access role for OpenGovernance
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:user/${IAMUsernameInOrganizationAccount}"
-            Action:
-              - 'sts:AssumeRole'
-              - 'sts:TagSession'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/ReadOnlyAccess
-
-  # Define SSO Role
-  OpenGovernanceSSORole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      RoleName: OpenGovernanceSSO
-      Description: SSO access role for OpenGovernance
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:user/${IAMUsernameInOrganizationAccount}"
-            Action:
-              - 'sts:AssumeRole'
-              - 'sts:TagSession'
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AWSSSOReadOnly
-
-  # Define Organization Reader Role
-  OpenGovernanceOrganizationReaderRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      RoleName: OpenGovernanceOrganizationReader
-      Description: Organization Reader access role for OpenGovernance
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:user/${IAMUsernameInOrganizationAccount}"
-            Action:
-              - 'sts:AssumeRole'
-              - 'sts:TagSession'
-      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/SecurityAudit
         - arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess
+        - arn:aws:iam::aws:policy/IAMAccessAnalyzerReadOnlyAccess
+        - arn:aws:iam::aws:policy/IAMAccessAdvisorReadOnly
+      Policies:
+        - PolicyName: OpenGovernanceSSOPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sso:Describe*'
+                  - 'sso:Get*'
+                  - 'sso:List*'
+                  - 'sso:Search*'
+                  - 'sso-directory:DescribeDirectory'
+                Resource: '*'
+        - PolicyName: OpenGovernanceAssumeRolePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sts:AssumeRole'
+                Resource: !Sub 'arn:aws:iam::*:role/${RoleNameInAccount}'
 
   # StackSet to Deploy Roles to Member Accounts
   MemberAccountRoleStackSet:
@@ -208,7 +125,7 @@ Resources:
       TemplateBody: |
         {
           "AWSTemplateFormatVersion": "2010-09-09",
-          "Description": "Create reader roles in member accounts.",
+          "Description": "Create a reader role in member accounts.",
           "Parameters": {
               "OrganizationIAMUserArn": {
                   "Type": "String",
