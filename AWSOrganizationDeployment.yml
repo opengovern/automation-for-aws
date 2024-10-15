@@ -211,14 +211,10 @@ Resources:
         }
 
 Outputs:
-  CFNOrganizationRoleArn:
-    Description: Organization Role ARN.
-    Value: !GetAtt OrganizationRole.Arn
-
-  AccessKeyId:
-    Description: Name of the IAM User.
+  IAMUserNameInMasterAccount:
+    Description: IAM Username in the Master Account.
     Value: !Ref IAMUsernameInOrganizationAccount
 
-  OrganizationIAMUserArn:
-    Description: ARN of the IAM User in the Organization Account.
-    Value: !Sub "arn:aws:iam::${AWS::AccountId}:user/${IAMUsernameInOrganizationAccount}"
+  IAMRoleName:
+    Description: IAM Rolename that is created.
+    Value: !Ref RoleNameInAccount
