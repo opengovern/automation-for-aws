@@ -1,5 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Deploys OpenGovernance Platform to AWS Organization
+
 Parameters:
   IAMUsernameInOrganizationAccount:
     Type: String
@@ -8,7 +9,7 @@ Parameters:
   IAMGroupnameInOrganizationAccount:
     Type: String
     Default: OpenGovernanceIAMGroup
-    Description: IAM User to create
+    Description: IAM Group to create
   RoleNameInAccount:
     Type: String
     Default: OpenGovernanceReadOnly
@@ -16,81 +17,94 @@ Parameters:
   AccountList:
     Type: String
     Default: ""
-    Description: List of Accounts to deploy the stackset to.
+    Description: Comma-separated list of Accounts to deploy the stackset to.
   OrganizationUnitList:
     Type: String
     Default: ""
-    Description: List of OUs to deploy the stackset to.
+    Description: Comma-separated list of OUs to deploy the stackset to.
 
 Conditions:
-  OUs: !Not [ !Equals [ !Ref OrganizationUnitList, ''] ]
-  Accounts: !Not [ !Equals [ !Ref AccountList, ''] ]
+  OUs: !Not [ !Equals [ !Ref OrganizationUnitList, '' ] ]
+  Accounts: !Not [ !Equals [ !Ref AccountList, '' ] ]
 
 Resources:
+  # IAM Role in the Management Account
   OrganizationRole:
     Type: 'AWS::IAM::Role'
     Properties:
       RoleName: !Ref RoleNameInAccount
       Description: Allows the platform to gather inventory of the organization and member accounts
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub '${AWS::AccountId}'
+            Action:
+              - 'sts:AssumeRole'
+              - 'sts:TagSession'
       Policies:
         - PolicyName: OpenGovernanceRoleAssumption
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Resource: '*'
                 Action:
                   - 'organizations:List*'
                   - 'sts:AssumeRole'
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !Sub '${AWS::AccountId}' 
-            Action:
-              - 'sts:AssumeRole'
-              - 'sts:TagSession'
+                Resource: '*'
       ManagedPolicyArns:
-          - arn:aws:iam::aws:policy/SecurityAudit
-          - arn:aws:iam::aws:policy/ReadOnlyAccess
-          - arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess
-          - arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess
-          - arn:aws:iam::aws:policy/AWSSSODirectoryReadOnly
-          - arn:aws:iam::aws:policy/AWSSSOReadOnly
-          - arn:aws:iam::aws:policy/IAMAccessAdvisorReadOnly
-          - arn:aws:iam::aws:policy/IAMAccessAnalyzerReadOnlyAccess
+        - arn:aws:iam::aws:policy/SecurityAudit
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSSSODirectoryReadOnly
+        - arn:aws:iam::aws:policy/AWSSSOReadOnly
+        - arn:aws:iam::aws:policy/IAMAccessAdvisorReadOnly
+        - arn:aws:iam::aws:policy/IAMAccessAnalyzerReadOnlyAccess
+
+  # IAM User in the Management Account
   IAMUserInOrganizationAccount:
-   Type: 'AWS::IAM::User'
-   Properties:
-    UserName: !Ref IAMUsernameInOrganizationAccount
+    Type: 'AWS::IAM::User'
+    Properties:
+      UserName: !Ref IAMUsernameInOrganizationAccount
+
+  # IAM Group in the Management Account
   IAMGroupInOrganizationAccount:
-   Type: 'AWS::IAM::Group'
-   Properties:
-     GroupName: !Ref IAMGroupnameInOrganizationAccount
+    Type: 'AWS::IAM::Group'
+    Properties:
+      GroupName: !Ref IAMGroupnameInOrganizationAccount
+
+  # Add IAM User to IAM Group
   AddOrganizationUserToOrganizationGroup:
     Type: 'AWS::IAM::UserToGroupAddition'
     Properties:
-     Users:
-      - !Ref IAMUserInOrganizationAccount
-     GroupName: !Ref IAMGroupInOrganizationAccount
+      Users:
+        - !Ref IAMUserInOrganizationAccount
+      GroupName: !Ref IAMGroupnameInOrganizationAccount
+    DependsOn: IAMGroupInOrganizationAccount
+
+  # Attach Policy to IAM Group to Allow AssumeRole on Member Accounts
   AttachRoleToOrganizationGroup:
-      Type: 'AWS::IAM::GroupPolicy'
-      Properties:
-        PolicyName: OpenGovernanceAllowRoleAssumption
-        GroupName: !Ref IAMGroupInOrganizationAccount
-        PolicyDocument:
-          Version: "2012-10-17"
-          Statement:
-            - Effect: Allow
-              Action:
-                - 'sts:AssumeRole'
-              Resource: !GetAtt OrganizationRole.Arn
+    Type: 'AWS::IAM::GroupPolicy'
+    Properties:
+      PolicyName: OpenGovernanceAllowRoleAssumption
+      GroupName: !Ref IAMGroupnameInOrganizationAccount
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sts:AssumeRole'
+            Resource: !Sub 'arn:aws:iam::*:role/${RoleNameInAccount}'
+    DependsOn: IAMGroupInOrganizationAccount
+
+  # StackSet to Deploy Roles to Member Accounts
   MemberAccountRoleStackSet:
     Type: 'AWS::CloudFormation::StackSet'
     Properties:
       StackSetName: OpenGovernanceMemberAccountRollout
-      Description: Stack Set that will roll out to member account
+      Description: Stack Set that will roll out to member accounts
       Capabilities:
         - CAPABILITY_NAMED_IAM
       AutoDeployment:
@@ -104,14 +118,14 @@ Resources:
       StackInstancesGroup:
         - DeploymentTargets: 
             Accounts: !If [Accounts, !Split [ ",", !Ref AccountList ], !Ref AWS::NoValue]
-            OrganizationalUnitIds: !If [OUs, !Split [ ",", !Ref OrganizationUnitList ], !Ref  AWS::NoValue]
+            OrganizationalUnitIds: !If [OUs, !Split [ ",", !Ref OrganizationUnitList ], !Ref AWS::NoValue]
           Regions: 
             - !Ref AWS::Region
       ManagedExecution:
         Active: true
       Parameters: 
-        - ParameterKey: OrganizationRoleArn
-          ParameterValue: !GetAtt OrganizationRole.Arn  
+        - ParameterKey: OrganizationIAMUserArn
+          ParameterValue: !Sub "arn:aws:iam::${AWS::AccountId}:user/${IAMUsernameInOrganizationAccount}"
         - ParameterKey: MemberAccountRoleName
           ParameterValue: !Ref RoleNameInAccount
       TemplateBody: |
@@ -119,9 +133,9 @@ Resources:
           "AWSTemplateFormatVersion": "2010-09-09",
           "Description": "Create a reader role in member accounts.",
           "Parameters": {
-              "OrganizationRoleArn": {
+              "OrganizationIAMUserArn": {
                   "Type": "String",
-                  "Description": "The role that is allowed to assume the role."
+                  "Description": "The IAM User ARN that is allowed to assume the role."
               },
               "MemberAccountRoleName": {
                   "Type": "String",
@@ -167,7 +181,7 @@ Resources:
                   "Type": "AWS::IAM::Role",
                   "Properties": {
                       "RoleName": { "Ref" : "MemberAccountRoleName" },
-                      "Description": "Read Only Access for to fetch inventory from member accounts",
+                      "Description": "Read Only Access to fetch inventory from member accounts",
                       "ManagedPolicyArns": [
                           {
                               "Ref": "OpenGovernance"
@@ -187,27 +201,30 @@ Resources:
                                   "Effect": "Allow",
                                   "Principal": {
                                       "AWS": {
-                                          "Fn::Sub": "${OrganizationRoleArn}"
+                                          "Fn::Sub": "${OrganizationIAMUserArn}"
                                       }
                                   },
                                   "Action": [
                                       "sts:AssumeRole",
                                       "sts:TagSession"
-                                        ]
-                                    }
-                                ]
-                            }
-                        }
-                    }
-                }
+                                  ]
+                              }
+                          ]
+                      }
+                  }
+              }
+          }
         }
-
 
 Outputs:
   CFNOrganizationRoleArn:
-    Description: Organization Role.
+    Description: Organization Role ARN.
     Value: !GetAtt OrganizationRole.Arn
+
   AccessKeyId:
-    Description: Name of the IAM User
+    Description: Name of the IAM User.
     Value: !Ref IAMUsernameInOrganizationAccount
-    
+
+  OrganizationIAMUserArn:
+    Description: ARN of the IAM User in the Organization Account.
+    Value: !Sub "arn:aws:iam::${AWS::AccountId}:user/${IAMUsernameInOrganizationAccount}"
