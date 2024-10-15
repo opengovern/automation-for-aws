@@ -30,19 +30,44 @@
 3. **Monitor Stack Deployment**
     Wait until the stack status is `CREATE_COMPLETE`.
     ```sh
-    aws cloudformation describe-stacks --stack-name OpenGovernance-Deploy --query "Stacks[0].StackStatus" --output text
+    aws cloudformation describe-stacks \
+      --stack-name OpenGovernance-Deploy \
+      --query "Stacks[0].StackStatus" \
+      --output text
     ```
 
 4. **Generate IAM Access Keys for OpenGovernanceIAMUser**
+    Retrieve the IAM username from the CloudFormation stack outputs and create access keys.
     ```sh
-    aws iam create-access-key --user-name OpenGovernanceIAMUser
+    IAM_USER=$(aws cloudformation describe-stacks \
+      --stack-name OpenGovernance-Deploy \
+      --query "Stacks[0].Outputs[?OutputKey=='IAMUserNameInMasterAccount'].OutputValue" \
+      --output text)
+    
+    aws iam create-access-key --user-name $IAM_USER
     ```
     *Store the `AccessKeyId` and `SecretAccessKey` from the output securely.*
 
-5. **Finalize Setup**
-    Ensure that the `OpenGovernanceIAMUser` has the necessary permissions required by OpenGovernance and that all configurations are properly applied.
+5. **Configure OpenGovernance Integration**
+    Retrieve the IAM Role name from the CloudFormation stack outputs:
+    ```sh
+    IAM_ROLE=$(aws cloudformation describe-stacks \
+      --stack-name OpenGovernance-Deploy \
+      --query "Stacks[0].Outputs[?OutputKey=='IAMRoleName'].OutputValue" \
+      --output text)
+    ```
+    Navigate to the OpenGovernance dashboard:
+    - Go to **Integrations** -> **AWS** -> **Add AWS Account**.
+    - Enter the following details in the wizard:
+      - **AccessKeyID:** *(Use the `AccessKeyId` from Step 4)*
+      - **SecretAccessKey:** *(Use the `SecretAccessKey` from Step 4)*
+      - **IAM Role Name:** `IAM_ROLE`
 
 ## Notes
 - **Security:** Store IAM access keys securely and rotate them regularly.
-- **Permissions:** The CloudFormation stack automatically creates the `OpenGovernanceIAMUser` and attaches the necessary policies. Ensure that these permissions align with OpenGovernance requirements.
+- **Permissions:** The CloudFormation stack automatically creates the `OpenGovernanceIAMUser` and attaches the necessary policies, as well as creates roles in target accounts. Ensure these permissions align with OpenGovernance requirements.
 - **Support:** Refer to the [AWS CloudFormation Documentation](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html) for assistance.
+
+---
+
+**Reminder:** Follow your organization's security policies when handling IAM credentials and managing AWS resources.
