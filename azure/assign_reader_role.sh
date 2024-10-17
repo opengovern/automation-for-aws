@@ -7,7 +7,6 @@
 #              outputs essential SPN information, including Object ID.
 # Requirements:
 #   - Azure CLI installed and authenticated
-#   - jq installed for JSON parsing
 #   - Sufficient permissions to create SPNs and assign roles at the
 #     subscription level
 # =====================================================================
@@ -15,7 +14,7 @@
 # ----------------------------- Variables -----------------------------
 
 # Service Principal Display Name
-SPN_DISPLAY_NAME="OpenGovernanceSPNX-2"
+SPN_DISPLAY_NAME="OpenGovernance-subscriptions"
 
 # Role to Assign
 ROLE_NAME="Reader"
@@ -31,7 +30,7 @@ check_login() {
   fi
 }
 
-# Function to create SPN
+# Function to create SPN without jq dependency
 create_spn() {
   local spn_name="$1"
   local spn_output
@@ -41,12 +40,10 @@ create_spn() {
 
   echo "Creating Service Principal '$spn_name'..."
 
-  # Create SPN and capture the output as JSON
+  # Create SPN and capture the output as TSV
   spn_output=$(az ad sp create-for-rbac --name "$spn_name" \
-    --role "$ROLE_NAME" \
-    --scopes "/subscriptions/$(az account show --query id -o tsv)" \
-    --query "{appId:appId, password:password, tenant:tenant}" \
-    --output json \
+    --query "[appId,password,tenant]" \
+    -o tsv \
     --only-show-errors)
 
   if [ $? -ne 0 ]; then
@@ -55,17 +52,33 @@ create_spn() {
     exit 1
   fi
 
-  # Parse the JSON output using jq
-  app_id=$(echo "$spn_output" | jq -r '.appId')
-  client_secret=$(echo "$spn_output" | jq -r '.password')
-  tenant_id=$(echo "$spn_output" | jq -r '.tenant')
+  # Check if spn_output is empty
+  if [ -z "$spn_output" ]; then
+    echo "Error: SPN creation returned empty output."
+    exit 1
+  fi
 
-  echo "Service Principal '$spn_name' has been created successfully."
+  # Parse the TSV output into variables using 'set --'
+  set -- $spn_output
+
+  # Assign variables to positional parameters
+  app_id="$1"
+  client_secret="$2"
+  tenant_id="$3"
+
+  # Validate if all variables are set
+  if [ -z "$app_id" ] || [ -z "$client_secret" ] || [ -z "$tenant_id" ]; then
+    echo "Error: Failed to parse SPN details. Ensure the Azure CLI returned appId, password, and tenant."
+    echo "Returned Output:"
+    echo "$spn_output"
+    exit 1
+  fi
+
 
   # Export SPN details
   APP_DISPLAY_NAME="$spn_name"
   APP_ID="$app_id"
-  CLIENT_ID="$app_id"  # Typically same as AppID
+  CLIENT_ID="$app_id"    # Typically same as AppID
   CLIENT_SECRET="$client_secret"
   TENANT_ID="$tenant_id"
 }
@@ -92,28 +105,40 @@ assign_role() {
 
 # ----------------------------- Main Script ---------------------------
 
+# Ensure the script is run with Bash
+if [ -z "$BASH_VERSION" ]; then
+  echo "Error: This script must be run with Bash."
+  exit 1
+fi
+
 # Step 1: Check if the user is logged in
 check_login
 
 # Step 2: Create SPN
 create_spn "$SPN_DISPLAY_NAME"
 
-# Step 3: Retrieve the SPN Object ID
-SPN_OBJECT_ID=$(az ad sp show --id "$APP_ID" --query "id" -o tsv --only-show-errors)
+# Step 3: Retrieve the Application Object ID
+APP_OBJECT_ID=$(az ad app show --id "$APP_ID" --query "id" -o tsv --only-show-errors)
 
-if [ -z "$SPN_OBJECT_ID" ]; then
-  echo "Error: Unable to retrieve Object ID for SPN."
+if [ -z "$APP_OBJECT_ID" ]; then
+  echo "Error: Unable to retrieve Application Object ID."
   exit 1
 fi
 
-# Display SPN details, including Object ID
+# (Optional) Retrieve the Service Principal Object ID if needed
+SP_OBJECT_ID=$(az ad sp show --id "$APP_ID" --query "id" -o tsv --only-show-errors)
+
+if [ -z "$SP_OBJECT_ID" ]; then
+  echo "Error: Unable to retrieve Service Principal Object ID."
+  exit 1
+fi
+
+# Display SPN details, including Object IDs
 echo "---------------------------------"
-echo "Service Principal Details:"
-echo "App Display Name: $APP_DISPLAY_NAME"
-echo "AppID (ClientID): $APP_ID"
-echo "Object ID: $SPN_OBJECT_ID"
-echo "Client Secret: $CLIENT_SECRET"
 echo "TenantID: $TENANT_ID"
+echo "Application (Client) ID: $APP_ID"
+echo "Object ID: $APP_OBJECT_ID"
+echo "Client Secret: $CLIENT_SECRET"
 echo "---------------------------------"
 
 # Step 4: Retrieve all enabled subscriptions
@@ -132,10 +157,9 @@ SUBSCRIPTION_COUNT=$(echo "$ENABLED_SUBSCRIPTIONS" | wc -l | tr -d '[:space:]')
 ASSIGNMENT_COUNT=0
 FAILED_ASSIGNMENTS=0
 
-echo "Assigning '$ROLE_NAME' role to SPN across all enabled subscriptions..."
 
 for SUBSCRIPTION_ID in $ENABLED_SUBSCRIPTIONS; do
-  assign_role "$SPN_OBJECT_ID" "$SUBSCRIPTION_ID" "$ROLE_NAME"
+  assign_role "$APP_OBJECT_ID" "$SUBSCRIPTION_ID" "$ROLE_NAME"
 
   if [ $? -eq 0 ]; then
     ASSIGNMENT_COUNT=$((ASSIGNMENT_COUNT + 1))
@@ -152,6 +176,3 @@ else
   # There were failures
   echo "Role Assignment failed on $FAILED_ASSIGNMENTS and completed successfully on $ASSIGNMENT_COUNT subscriptions."
 fi
-
-echo ""
-echo "Role assignment process completed."
